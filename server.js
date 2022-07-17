@@ -1,6 +1,14 @@
 import express from 'express';
 
+import http from 'http';
+
+import { Server } from 'socket.io';
+
 import session from 'express-session';
+
+import Contenedor from './public/productos.js'
+
+import Mensajeria from './public/mensajes.js'
 
 import MongoStore from 'connect-mongo';
 
@@ -14,6 +22,13 @@ import { Strategy } from 'passport-local'
 
 import flash from 'connect-flash';
 
+import routerUsuariosRegistrados from './routers/usuariosRegistradosRouter.js';
+
+import { usuariosDao } from './daos/index.js';
+
+const caja = new Contenedor();
+const mensajeriaANormalizar = new Mensajeria('./public/mensajesANormalizar.txt');
+
 const advancedOptions = { useNewUrlParser: true, useUnifiedTopology: true }
 const app = express()
 
@@ -25,6 +40,9 @@ app.use(express.static('public'))
 app.use(express.urlencoded())
 app.use(bodyParser.urlencoded());
 app.use(flash());
+app.use(routerUsuariosRegistrados);
+const httpServer = new http.Server(app);
+const io = new Server(httpServer);
 
 
 passport.serializeUser(function(user, done) {
@@ -35,55 +53,36 @@ passport.deserializeUser(function(obj, done) {
     done(null, obj);
 });
 
-
-passport.use('local', new Strategy({ 
-    // passReqToCallback: true,
+passport.use('login', new Strategy({ 
     usernameField: 'nombre',
     passwordField: 'contraseña',
 },
-    function(username, password, done) {
-        console.log("LocalStrategy working...");
-        // const nombre = req.nombre;
-        // const contraseña = req.contraseña;
+    async (username, password, done) => {
+        console.log('funcionando')
+        let usuarioEncontrado = 0;
+        const obj = await usuariosDao.getAll();
         console.log(username);
         console.log(password);
-        return done(null, { id: 1, nombre: username, contraseña: password});
-    }
-))
-
-
-// function autenticar(req, username, password) {
-//     if (username == req.session.passport.user) {
-//         return true
-//     }
-// }
-
-passport.use('login', new Strategy({ 
-    passReqToCallback: true,
-    usernameField: 'nombre',
-    passwordField: 'contraseña',
-},
-    (req, username, password, done) => {
-        if (req.session.passport.user == undefined) {
-            done(null, false)
-        } else {
-            let contador = 0;
-            if (username == req.session.passport.user.nombre) {
-
-                contador++;
+        for (let index = 0; index < obj.length; index++) {
+            const usuario = await obj[index];
+            console.log(usuario.nombre);
+            console.log(usuario.contraseña);
+            if(await usuario.nombre == username){
+                usuarioEncontrado++;
+                if(await usuario.contraseña == password){
+                    usuarioEncontrado++;
+                }
             }
-            if (password == req.session.passport.user.contraseña) {
-            contador++;
-            }
-            if(contador == 2){
-                done(null, { id: 1, nombre: username, contraseña: password})
-            }
-            
+            console.log(usuarioEncontrado);
         }
-        
+        if(usuarioEncontrado == 2){
+            done(null, { id: 1, nombre: username, contraseña: password})
+        }else{
+            done(null, false)
+        }
     }))
 
-    
+
 app.use(session({
     store: MongoStore.create({
         mongoUrl: `mongodb+srv://root:1234@cluster0.5xw3itz.mongodb.net/?retryWrites=true&w=majority`,
@@ -98,18 +97,14 @@ app.use(session({
 app.use(passport.initialize());
 app.use(passport.session());
 
-app.get('/', (req, res)=>{
+app.get('/registro', (req, res)=>{
     res.render('inicio');
 })
 
-app.post('/registro', passport.authenticate('local', { failureRedirect: '/fail-registro', failureFlash: true}),(req,res)=>{
+app.post('/login', async (req,res)=>{
      if(req.body.nombre){
         res.render('registrado', {nombre: req.body.nombre} )
-        req.session.user = req.body.nombre;
-        req.session.password = req.body.contraseña;
-        req.session.cookie.maxAge = 60000;
-        console.log(req.session.passport.user)
-        //RENDERIZAR UN LOGIN QUE DIRIJA A UNA RUTA CON PASSPORT DE LOGIN
+        await usuariosDao.save(req.body);
       }
       else{
         res.send('login failed')
@@ -117,15 +112,33 @@ app.post('/registro', passport.authenticate('local', { failureRedirect: '/fail-r
 })
 
 
-app.get('/registro', passport.authenticate('local2', { failureRedirect: '/fail-registro', failureFlash: true}),(req,res)=>{
+app.get('/login',(req,res)=>{
     res.render('registrado')
 })
 
-app.get('/login', (req, res)=>{
-    res.render('logueado', {nombre: req.session.passport.user.nombre})
+app.get('/inicio', async (req, res)=>{
+    console.log(await caja.obtenerTodos());
+    if (req.session.passport) {
+        await caja.crearTabla();
+        await caja.obtenerTodos();
+        let productos = await caja.obtenerTodos();
+        let mensajes = await mensajeriaANormalizar.obtenerTodos();
+        res.render('logueado', { titulo: 'PRODUCTO', titulo2: 'PRECIO', titulo3: 'THUMBNAIL', productos, mensajes, nombre: req.session.passport.user.nombre});
+    } else {
+        res.render('redireccion');
+    }
+    
     })
 
-app.post('/login', passport.authenticate('login', { successRedirect : '/login', failureRedirect: '/fail-login', failureFlash: true}),(req, res)=>{
+app.post('/inicio', passport.authenticate('login', { failureRedirect: '/fail-login', failureFlash: true}), async (req, res)=>{
+    req.session.user = req.body.nombre;
+    req.session.password = req.body.contraseña;
+    req.session.cookie.maxAge = 60000;
+    await caja.obtenerTodos();
+    let productos = await caja.obtenerTodos();
+    let mensajes = await mensajeriaANormalizar.obtenerTodos();
+    res.render('logueado', { titulo: 'PRODUCTO', titulo2: 'PRECIO', titulo3: 'THUMBNAIL', productos, mensajes, nombre: req.session.passport.user.nombre});
+
 })
 
 app.get('/fail-registro', (req, res)=>{
@@ -140,7 +153,6 @@ app.get('/fail-login', (req, res)=>{
 
 
 app.get('/logout', (req, res) => {
-    console.log(req.session.passport.user)
     req.session.destroy(err => {
       if (err) {
         res.json({ status: 'Logout ERROR', body: err })
