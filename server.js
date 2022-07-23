@@ -45,7 +45,6 @@ app.use(flash());
 // app.use(routerDefault);
 const httpServer = new HttpServer(app);
 const io = new IOServer(httpServer);
-export default io;
 
 app.use(session({
     store: MongoStore.create({
