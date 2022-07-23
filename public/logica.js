@@ -1,4 +1,3 @@
-import io from '../server.js'
 const socket = io();
 
 const butto = document.getElementById('btn');
