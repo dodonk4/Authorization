@@ -1,8 +1,8 @@
 import express from 'express';
 
-import http from 'http';
+import { Server as HttpServer } from 'http';
 
-import { Server } from 'socket.io';
+import { Server as IOServer } from 'socket.io';
 
 import session from 'express-session';
 
@@ -18,11 +18,13 @@ import { engine } from 'express-handlebars';
 
 import passport from 'passport';
 
-import { Strategy } from 'passport-local'
+import { Strategy } from 'passport-local';
 
 import flash from 'connect-flash';
 
-import routerUsuariosRegistrados from './routers/usuariosRegistradosRouter.js';
+import bcrypt from 'bcrypt';
+
+// import routerDefault from './routers/defaultRouter.js';
 
 import { usuariosDao } from './daos/index.js';
 
@@ -40,48 +42,10 @@ app.use(express.static('public'))
 app.use(express.urlencoded())
 app.use(bodyParser.urlencoded());
 app.use(flash());
-app.use(routerUsuariosRegistrados);
-const httpServer = new http.Server(app);
-const io = new Server(httpServer);
-
-
-passport.serializeUser(function(user, done) {
-    done(null, user);
-});
-
-passport.deserializeUser(function(obj, done) {
-    done(null, obj);
-});
-
-passport.use('login', new Strategy({ 
-    usernameField: 'nombre',
-    passwordField: 'contraseña',
-},
-    async (username, password, done) => {
-        console.log('funcionando')
-        let usuarioEncontrado = 0;
-        const obj = await usuariosDao.getAll();
-        console.log(username);
-        console.log(password);
-        for (let index = 0; index < obj.length; index++) {
-            const usuario = await obj[index];
-            console.log(usuario.nombre);
-            console.log(usuario.contraseña);
-            if(await usuario.nombre == username){
-                usuarioEncontrado++;
-                if(await usuario.contraseña == password){
-                    usuarioEncontrado++;
-                }
-            }
-            console.log(usuarioEncontrado);
-        }
-        if(usuarioEncontrado == 2){
-            done(null, { id: 1, nombre: username, contraseña: password})
-        }else{
-            done(null, false)
-        }
-    }))
-
+// app.use(routerDefault);
+const httpServer = new HttpServer(app);
+const io = new IOServer(httpServer);
+export default io;
 
 app.use(session({
     store: MongoStore.create({
@@ -97,14 +61,76 @@ app.use(session({
 app.use(passport.initialize());
 app.use(passport.session());
 
+
+passport.serializeUser(function(user, done) {
+    done(null, user);
+});
+
+passport.deserializeUser(function(obj, done) {
+    done(null, obj);
+});
+
+
+passport.use('login', new Strategy({ 
+    usernameField: 'nombre',
+    passwordField: 'contraseña',
+},
+    async (username, password, done) => {
+        let usuarioEncontrado = 0;
+        const obj = await usuariosDao.getAll();
+        console.log(username);
+        console.log(password);
+        
+        for (let index = 0; index < obj.length; index++) {
+            const usuario = await obj[index];
+            let comparacion = bcrypt.compareSync(password, usuario.contraseña);
+            if(comparacion === true){
+                usuarioEncontrado++;
+            }
+            if(await usuario.nombre == username){
+                usuarioEncontrado++;
+            }
+        }
+        if(usuarioEncontrado == 2){
+            done(null, { id: 1, nombre: username, contraseña: password})
+        }else{
+            done(null, false)
+        }
+    }))
+
+    passport.use('registro', new Strategy({
+        passReqToCallback: true,
+        usernameField: 'nombre',
+        passwordField: 'contraseña'
+    },
+        async (req, username, password, done) => {
+            console.log(username);
+            console.log(password);
+            console.log(req.body);
+            let salt = bcrypt.genSaltSync(8);
+            let hash = bcrypt.hashSync(req.body.contraseña, salt);
+            req.body.contraseña = hash;
+                try {
+                    if(await usuariosDao.checkForDoubleUser(req.body) === false){
+                        done(null, null);
+                    }else{
+                        await usuariosDao.save(req.body);
+                        done(null, req.body)
+                    }
+                } catch (error) {
+                    done(error)
+                }
+        }))
+
+
 app.get('/registro', (req, res)=>{
     res.render('inicio');
 })
 
-app.post('/login', async (req,res)=>{
+
+app.post('/login', passport.authenticate('registro', { failureRedirect: '/fail-registro', failureFlash: true}), async (req,res)=>{
      if(req.body.nombre){
         res.render('registrado', {nombre: req.body.nombre} )
-        await usuariosDao.save(req.body);
       }
       else{
         res.send('login failed')
@@ -117,7 +143,6 @@ app.get('/login',(req,res)=>{
 })
 
 app.get('/inicio', async (req, res)=>{
-    console.log(await caja.obtenerTodos());
     if (req.session.passport) {
         await caja.crearTabla();
         await caja.obtenerTodos();
@@ -143,7 +168,8 @@ app.post('/inicio', passport.authenticate('login', { failureRedirect: '/fail-log
 
 app.get('/fail-registro', (req, res)=>{
     console.log(req.flash('error'));
-    res.redirect('/');
+    // res.redirect('/');
+    res.send('Fallaste el registro <br> El usuario ya está registrado con dicho nombre o debe de llenar los espacios de registro apropiadamente');
 })
 
 app.get('/fail-login', (req, res)=>{
@@ -162,6 +188,34 @@ app.get('/logout', (req, res) => {
     })
   })
 
-const server = app.listen(8080, () => {
-    console.log(`escuchando en puerto ${server.address().port}`)
+  
+
+
+app.use('/', (req,res)=>{
+    res.send('ok');
 })
+
+io.on('connection', async (socket)=>{
+    
+    console.log('Usuario conectado: ' + socket.id);
+
+
+    socket.on('prod', async (data)=>{
+        console.log('socket funcionando')
+        await caja.insertarProductosIndividuales(data);
+        io.sockets.emit('prod', data)
+    })
+
+    socket.on('mensaje', async(data)=>{
+        console.log('socket funcionando')
+        await mensajeriaANormalizar.insertarMensajesIndividuales(data.cosa2);
+        io.sockets.emit('mensaje', data);
+
+    })
+
+})
+
+
+httpServer.listen(8080, () => {
+    console.log(`listening on port http://localhost:${8080}`);
+});

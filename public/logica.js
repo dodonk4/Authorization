@@ -1,8 +1,10 @@
+import io from '../server.js'
 const socket = io();
 
 const butto = document.getElementById('btn');
 const divo = document.getElementById('ulo');
 butto.addEventListener('click', event =>{
+    console.log('clickeado');
     const title = document.getElementById('title').value;
     const price = document.getElementById('price').value;
     const thumbnail = document.getElementById('thumbnail').value;
@@ -31,6 +33,7 @@ butto.addEventListener('click', event =>{
     }
 
     if(verificador === 3){
+        copnsole.log('enviando');
         socket.emit('prod', {title, price, thumbnail});
     }
     
